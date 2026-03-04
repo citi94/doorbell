@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doorbell</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0b09;
+    --surface: #161513;
+    --border: #2a2723;
+    --text: #e8e2d6;
+    --text-dim: #8a8477;
+    --text-faint: #5c5750;
+    --amber: #d4a24e;
+    --amber-dim: #a17a35;
+    --amber-glow: #d4a24e18;
+    --green: #6b9e6b;
+    --red: #c45c4a;
+    --blue: #5b8cc4;
+    --purple: #9b7ec4;
+    --radius: 10px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  @media (max-width: 600px) { body { padding: 16px; } }
+
+  /* --- Header --- */
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 40px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    animation: fadeDown 0.6s ease;
+  }
+
+  header h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 2.2em;
+    font-weight: 400;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .status {
+    font-size: 0.78em;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 3s ease infinite;
+  }
+
+  .status-dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  /* --- Stat cards --- */
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px;
+    margin-bottom: 40px;
+    animation: fadeDown 0.6s ease 0.05s both;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .stat-card:hover { border-color: var(--amber-dim); }
+
+  .stat-card .value {
+    font-family: 'Instrument Serif', serif;
+    font-size: 2.4em;
+    font-weight: 400;
+    color: var(--amber);
+    line-height: 1;
+  }
+
+  .stat-card .label {
+    font-size: 0.7em;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 8px;
+  }
+
+  /* --- Sections --- */
+
+  section {
+    margin-bottom: 36px;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.35em;
+    font-weight: 400;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  /* --- Period selector --- */
+
+  .pill-group {
+    display: flex;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 3px;
+  }
+
+  .pill-group button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 4px 12px;
+    border-radius: 16px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.72em;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .pill-group button.active {
+    background: var(--amber);
+    color: var(--bg);
+  }
+
+  .pill-group button:hover:not(.active) { color: var(--text); }
+
+  /* --- Hourly chart --- */
+
+  .chart-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 20px 10px;
+    animation: fadeDown 0.6s ease 0.1s both;
+  }
+
+  .chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 80px;
+  }
+
+  .chart .col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .chart .bar {
+    width: 100%;
+    border-radius: 3px 3px 1px 1px;
+    background: linear-gradient(to top, var(--amber-dim), var(--amber));
+    min-height: 0;
+    transition: height 0.5s ease;
+    position: relative;
+  }
+
+  .chart .bar:hover { opacity: 0.8; }
+  .chart .bar[data-n]:hover::after {
+    content: attr(data-n);
+    position: absolute;
+    top: -22px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.65em;
+    color: var(--amber);
+    background: var(--bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .chart .lbl {
+    font-size: 0.58em;
+    color: var(--text-faint);
+  }
+
+  .chart .col.now .bar { background: linear-gradient(to top, var(--amber), #f0c56e); box-shadow: 0 0 12px var(--amber-glow); }
+  .chart .col.now .lbl { color: var(--amber); font-weight: 600; }
+
+  /* --- Faces --- */
+
+  .faces-grid {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    animation: fadeDown 0.6s ease 0.15s both;
+  }
+
+  .face-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    transition: border-color 0.3s, transform 0.2s;
+  }
+
+  .face-card:hover { border-color: var(--purple); transform: translateY(-2px); }
+
+  .face-name {
+    font-family: 'Instrument Serif', serif;
+    font-size: 1.1em;
+    color: var(--text);
+  }
+
+  .face-meta {
+    font-size: 0.72em;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .face-meta span { color: var(--purple); }
+
+  /* --- Event filters --- */
+
+  .filters {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .filters button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 4px 14px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.73em;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .filters button.active {
+    border-color: var(--amber);
+    color: var(--amber);
+    background: var(--amber-glow);
+  }
+
+  .filters button:hover:not(.active) { border-color: var(--text-faint); color: var(--text); }
+
+  /* --- Events table --- */
+
+  .events-wrap {
+    animation: fadeDown 0.6s ease 0.2s both;
+  }
+
+  .event-row {
+    display: grid;
+    grid-template-columns: 120px auto 1fr;
+    gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid #1c1a17;
+    align-items: center;
+    transition: background 0.15s;
+  }
+
+  .event-row:hover { background: #12110f; margin: 0 -8px; padding: 10px 8px; border-radius: 6px; }
+
+  .event-time {
+    font-size: 0.78em;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .event-type {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.72em;
+    font-weight: 500;
+    width: fit-content;
+  }
+
+  .t-ring     { background: #d4a24e18; color: var(--amber); }
+  .t-person   { background: #5b8cc418; color: var(--blue); }
+  .t-face     { background: #9b7ec418; color: var(--purple); }
+  .t-motion   { background: #6b9e6b18; color: var(--green); }
+  .t-pet      { background: #d4a24e18; color: #c9a462; }
+  .t-stranger { background: #c45c4a18; color: var(--red); }
+
+  .event-detail {
+    font-size: 0.82em;
+    color: var(--text-dim);
+  }
+
+  .event-detail:not(:empty) { color: var(--text); }
+
+  .empty-state {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--text-faint);
+    font-size: 0.88em;
+    font-style: italic;
+  }
+
+  /* --- System status bar --- */
+
+  .sys-bar {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    font-size: 0.73em;
+    color: var(--text-dim);
+    margin-bottom: 28px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .sys-bar .sys-item { display: flex; gap: 5px; }
+  .sys-bar .sys-val { color: var(--text); }
+
+  /* --- Toolbar (search, export, dates) --- */
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .toolbar input[type="text"],
+  .toolbar input[type="date"] {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.82em;
+    outline: none;
+  }
+
+  .toolbar input[type="text"]:focus,
+  .toolbar input[type="date"]:focus {
+    border-color: var(--amber-dim);
+  }
+
+  .toolbar input[type="text"] { width: 180px; }
+  .toolbar input[type="date"] { width: 130px; }
+
+  .toolbar .btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.75em;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .toolbar .btn:hover { border-color: var(--amber-dim); color: var(--text); }
+
+  .toolbar .sep { color: var(--text-faint); font-size: 0.75em; }
+  .toolbar .count { font-size: 0.73em; color: var(--text-faint); margin-left: auto; }
+
+  /* --- Daily summary table --- */
+
+  .daily-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8em;
+  }
+
+  .daily-table th {
+    text-align: left;
+    color: var(--text-faint);
+    font-weight: 500;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .daily-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #1c1a17;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .daily-table tr:hover td { background: #12110f; }
+  .daily-table td:first-child { color: var(--text); }
+  .daily-table td.num { text-align: right; }
+  .daily-table td.num:not(:empty) { color: var(--text); }
+
+  /* --- Animations --- */
+
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+
+  /* --- Scrollbar --- */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Doorbell</h1>
+  <div class="status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connected</span>
+  </div>
+</header>
+
+<div class="sys-bar" id="sysBar"></div>
+
+<div class="stats" id="stats"></div>
+
+<section>
+  <div class="section-head">
+    <h2>Activity</h2>
+    <div class="pill-group" id="period">
+      <button data-d="-1 day" class="active">24h</button>
+      <button data-d="-7 days">7d</button>
+      <button data-d="-30 days">30d</button>
+      <button data-d="-365 days">All</button>
+    </div>
+  </div>
+  <div class="chart-wrap">
+    <div class="chart" id="hours"></div>
+  </div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Known Faces</h2>
+  </div>
+  <div class="faces-grid" id="faces"></div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Daily Summary</h2>
+    <div class="pill-group" id="dailyPeriod">
+      <button data-d="-7 days" class="active">7d</button>
+      <button data-d="-30 days">30d</button>
+      <button data-d="-90 days">90d</button>
+    </div>
+  </div>
+  <div class="chart-wrap">
+    <table class="daily-table" id="daily">
+      <thead><tr><th>Date</th><th>Ring</th><th>Person</th><th>Face</th><th>Motion</th><th>Pet</th><th>Stranger</th><th>Total</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="section-head">
+    <h2>Recent Events</h2>
+  </div>
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Search details...">
+    <span class="sep">|</span>
+    <input type="date" id="dateFrom" title="From date">
+    <input type="date" id="dateTo" title="To date">
+    <button class="btn" onclick="exportData('csv')">CSV</button>
+    <button class="btn" onclick="exportData('json')">JSON</button>
+    <span class="count" id="eventCount"></span>
+  </div>
+  <div class="filters" id="filters">
+    <button class="active" data-t="">All</button>
+    <button data-t="ring">Ring</button>
+    <button data-t="person">Person</button>
+    <button data-t="face">Face</button>
+    <button data-t="motion">Motion</button>
+    <button data-t="pet">Pet</button>
+    <button data-t="stranger">Stranger</button>
+  </div>
+  <div class="events-wrap" id="events"></div>
+</section>
+
+<script>
+let filter = '', period = '-1 day', dailyPeriod = '-7 days', searchQuery = '';
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+function ago(ts) {
+  const d = (Date.now() - new Date(ts)) / 1000;
+  if (d < 60) return Math.floor(d) + 's ago';
+  if (d < 3600) return Math.floor(d / 60) + 'm ago';
+  if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+  return Math.floor(d / 86400) + 'd ago';
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return time;
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + time;
+}
+
+function fmtUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+
+function esc(s) {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function loadStatus() {
+  try {
+    const st = await fetch('/api/status').then(r => r.json());
+    $('#sysBar').innerHTML = [
+      ['Uptime', fmtUptime(st.uptime)],
+      ['Device', st.device || 'MISSING'],
+      ['Sessions', st.sessions],
+      ['DB', fmtBytes(st.dbSize)],
+      ['Events', st.totalEvents.toLocaleString()],
+      ['Started', new Date(st.startedAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })],
+    ].map(([k, v]) =>
+      `<div class="sys-item"><span>${k}:</span> <span class="sys-val">${v}</span></div>`
+    ).join('');
+  } catch (e) {}
+}
+
+async function loadDaily() {
+  try {
+    const rows = await fetch('/api/daily?period=' + dailyPeriod).then(r => r.json());
+    const types = ['ring', 'person', 'face', 'motion', 'pet', 'stranger'];
+    // Group by day
+    const days = {};
+    for (const r of rows) {
+      if (!days[r.day]) days[r.day] = {};
+      days[r.day][r.type] = r.count;
+    }
+    const tbody = $('#daily tbody');
+    const dayKeys = Object.keys(days).sort().reverse();
+    if (!dayKeys.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-faint); padding:20px;">No data</td></tr>';
+      return;
+    }
+    tbody.innerHTML = dayKeys.map(day => {
+      const d = days[day];
+      const total = types.reduce((s, t) => s + (d[t] || 0), 0);
+      const fmtDay = new Date(day + 'T12:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+      return '<tr><td>' + fmtDay + '</td>' +
+        types.map(t => '<td class="num">' + (d[t] || '') + '</td>').join('') +
+        '<td class="num">' + total + '</td></tr>';
+    }).join('');
+  } catch (e) {}
+}
+
+async function load() {
+  try {
+    let evtsPromise;
+    if (searchQuery) {
+      evtsPromise = fetch('/api/search?q=' + encodeURIComponent(searchQuery) + '&limit=100').then(r => r.json());
+    } else {
+      evtsPromise = fetch('/api/events?type=' + filter + '&limit=100').then(r => r.json());
+    }
+
+    const [evts, stats, hours, faces] = await Promise.all([
+      evtsPromise,
+      fetch('/api/stats?period=' + period).then(r => r.json()),
+      fetch('/api/hours?period=' + period).then(r => r.json()),
+      fetch('/api/faces?period=' + period).then(r => r.json()),
+    ]);
+
+    $('#statusDot').className = 'status-dot';
+    $('#statusText').textContent = 'Connected';
+
+    // Stats
+    $('#stats').innerHTML = stats.length ? stats.map(s =>
+      `<div class="stat-card"><div class="value">${s.count}</div><div class="label">${esc(s.type)}</div></div>`
+    ).join('') : '';
+
+    // Hourly chart
+    const maxH = Math.max(...hours.map(h => h.count), 1);
+    const hourMap = Object.fromEntries(hours.map(h => [h.hour, h.count]));
+    const nowHour = new Date().getHours();
+    $('#hours').innerHTML = Array.from({ length: 24 }, (_, i) => {
+      const c = hourMap[i] || 0;
+      const pct = c > 0 ? Math.max((c / maxH) * 100, 4) : 0;
+      const cls = i === nowHour ? ' now' : '';
+      return `<div class="col${cls}"><div class="bar" style="height:${pct}%" data-n="${c}"></div><div class="lbl">${i % 3 === 0 ? String(i).padStart(2, '0') : ''}</div></div>`;
+    }).join('');
+
+    // Faces
+    $('#faces').innerHTML = faces.length ? faces.map(f =>
+      `<div class="face-card"><div class="face-name">${esc(f.name)}</div><div class="face-meta"><span>${f.count}</span> visit${f.count !== 1 ? 's' : ''} &middot; ${ago(f.last_seen)}</div></div>`
+    ).join('') : '<div class="empty-state">No faces recognised yet</div>';
+
+    // Events
+    $('#eventCount').textContent = evts.length + ' event' + (evts.length !== 1 ? 's' : '');
+    $('#events').innerHTML = evts.length ? evts.map(e =>
+      `<div class="event-row"><div class="event-time">${fmtTime(e.timestamp)}</div><div><span class="event-type t-${esc(e.type)}">${esc(e.type)}</span></div><div class="event-detail">${esc(e.detail)}</div></div>`
+    ).join('') : '<div class="empty-state">No events recorded yet</div>';
+
+  } catch (err) {
+    $('#statusDot').className = 'status-dot offline';
+    $('#statusText').textContent = 'Offline';
+  }
+}
+
+function exportData(format) {
+  const from = $('#dateFrom').value ? $('#dateFrom').value + 'T00:00:00Z' : '';
+  const to = $('#dateTo').value ? $('#dateTo').value + 'T23:59:59Z' : '';
+  let url = '/api/export?format=' + format;
+  if (filter) url += '&type=' + filter;
+  if (from) url += '&from=' + from;
+  if (to) url += '&to=' + to;
+  window.open(url, '_blank');
+}
+
+// Period selector (activity chart)
+$$('#period button').forEach(b => b.onclick = () => {
+  $$('#period button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  period = b.dataset.d;
+  load();
+});
+
+// Daily summary period
+$$('#dailyPeriod button').forEach(b => b.onclick = () => {
+  $$('#dailyPeriod button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  dailyPeriod = b.dataset.d;
+  loadDaily();
+});
+
+// Event type filters
+$$('#filters button').forEach(b => b.onclick = () => {
+  $$('#filters button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  filter = b.dataset.t;
+  load();
+});
+
+// Search with debounce
+let searchTimer;
+$('#search').oninput = (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = e.target.value.trim();
+    load();
+  }, 300);
+};
+
+load();
+loadStatus();
+loadDaily();
+setInterval(load, 30000);
+setInterval(loadStatus, 30000);
+setInterval(loadDaily, 30000);
+</script>
+</body>
+</html>

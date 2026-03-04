@@ -1,0 +1,13 @@
+{
+  "name": "doorbell",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Eufy E340 doorbell → HomeKit bridge (HAP-nodejs + eufy-security-client)",
+  "main": "doorbell.js",
+  "dependencies": {
+    "eufy-security-client": "^3.8.0",
+    "@homebridge/hap-nodejs": "^2.0.2",
+    "dotenv": "^16.4.0",
+    "pick-port": "^2.1.0"
+  }
+}

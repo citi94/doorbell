@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+name="doorbell"
+description="Eufy Doorbell HomeKit Bridge"
+
+command="/usr/bin/node"
+command_args="/opt/doorbell/doorbell.js"
+command_user="root"
+
+supervisor=supervise-daemon
+supervise_daemon_args="--respawn-delay 5 --respawn-max 10 --respawn-period 60"
+
+output_log="/var/log/doorbell.log"
+error_log="/var/log/doorbell.log"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --directory --mode 0700 /opt/doorbell/persist
+}
