@@ -403,10 +403,12 @@ const streamingDelegate = {
 
   async prepareStream(request, callback) {
     const sessionId = request.sessionID;
+    const t0 = Date.now();
 
     try {
       const videoReturnPort = await pickPort({ type: 'udp', reserveTimeout: 15 });
       const audioReturnPort = await pickPort({ type: 'udp', reserveTimeout: 15 });
+      log(`[${sessionId.substring(0, 8)}] prepareStream ports allocated in ${Date.now() - t0}ms`);
       const videoSSRC = CameraController.generateSynchronisationSource();
       const audioSSRC = CameraController.generateSynchronisationSource();
 
@@ -422,6 +424,7 @@ const streamingDelegate = {
         audioCryptoSuite: request.audio.srtpCryptoSuite,
         audioSRTP: Buffer.concat([request.audio.srtp_key, request.audio.srtp_salt]),
         audioSSRC,
+        audioPt: null,          // stored at stream start for deferred return audio
         ffmpegProcess: null,
         videoStream: null,
         audioFfmpegProcess: null,
@@ -429,6 +432,7 @@ const streamingDelegate = {
         returnAudioFfmpeg: null,
         talkbackActive: false,
         talkbackStream: null,
+        streamStartTime: 0,     // Date.now() for latency tracking
       };
 
       callback(undefined, {
@@ -514,7 +518,8 @@ accessory.configureController(doorbellController);
 // ---------------------------------------------------------------------------
 
 async function startLivestream(session, sessionId, videoInfo, audioInfo) {
-  log(`Starting livestream for session ${sessionId}`);
+  const t0 = Date.now();
+  const sid = sessionId.substring(0, 8);
 
   if (!eufyClient || !eufyDevice) {
     log('Eufy client or device not ready — cannot start stream');
@@ -523,16 +528,24 @@ async function startLivestream(session, sessionId, videoInfo, audioInfo) {
   }
 
   try {
-    const sid = sessionId.substring(0, 8);
+    session.streamStartTime = t0;
+    session.audioPt = audioInfo.pt;
 
-    // Video ffmpeg: H.264 from stdin → SRTP to HomeKit controller
+    // 1. Fire P2P FIRST — this is the slowest step (2-5s), let it work while we set up ffmpeg
+    const p2pPromise = eufyClient.startStationLivestream(DEVICE_SERIAL);
+    log(`[${sid}] +${Date.now() - t0}ms P2P requested`);
+
+    // 2. Spawn video ffmpeg while P2P establishes
+    // nobuffer + zero probe: we know it's H.264, skip analysis for fastest first frame
     const ffmpegArgs = [
       '-hide_banner', '-loglevel', 'warning',
-      '-fflags', '+genpts',
+      '-fflags', '+genpts+nobuffer',
+      '-analyzeduration', '0', '-probesize', '32',
       '-f', 'h264', '-i', 'pipe:0',
       '-codec:v', 'copy',
       '-payload_type', String(videoInfo.pt),
       '-f', 'rtp',
+      '-flush_packets', '1',
       '-ssrc', String(session.videoSSRC),
       '-srtp_out_suite', 'AES_CM_128_HMAC_SHA1_80',
       '-srtp_out_params', session.videoSRTP.toString('base64'),
@@ -563,17 +576,18 @@ async function startLivestream(session, sessionId, videoInfo, audioInfo) {
 
     session.ffmpegProcess = ffmpegProcess;
 
-    // Audio ffmpeg: AAC from stdin → AAC-ELD SRTP to HomeKit controller
-    // Uses ffmpeg-hk (homebridge build) for libfdk_aac AAC-ELD support
+    // 3. Spawn audio ffmpeg (also with reduced buffering)
     const audioFfmpegArgs = [
       '-hide_banner', '-loglevel', 'warning',
-      '-fflags', '+genpts',
+      '-fflags', '+genpts+nobuffer',
+      '-analyzeduration', '0', '-probesize', '32',
       '-f', 'aac', '-i', 'pipe:0',
       '-codec:a', 'libfdk_aac', '-profile:a', 'aac_eld',
       '-ar', '16000', '-ac', '1', '-b:a', '24k',
       '-flags', '+global_header',
       '-payload_type', String(audioInfo.pt),
       '-f', 'rtp',
+      '-flush_packets', '1',
       '-ssrc', String(session.audioSSRC),
       '-srtp_out_suite', 'AES_CM_128_HMAC_SHA1_80',
       '-srtp_out_params', session.audioSRTP.toString('base64'),
@@ -600,58 +614,14 @@ async function startLivestream(session, sessionId, videoInfo, audioInfo) {
     audioFfmpegProcess.stdin.on('error', () => {}); // suppress EPIPE
 
     session.audioFfmpegProcess = audioFfmpegProcess;
+    log(`[${sid}] +${Date.now() - t0}ms ffmpeg processes spawned`);
 
-    // Return audio ffmpeg: receive SRTP from HomeKit mic → decode AAC-ELD → encode AAC-LC ADTS
-    // SDP must use c=127.0.0.1 (ffmpeg binds locally), no config= (causes extradata errors)
-    // Must force libfdk_aac decoder (built-in aac can't handle AAC-ELD)
-    const sdpContent = [
-      'v=0',
-      'o=- 0 0 IN IP4 127.0.0.1',
-      's=HomeKit Return Audio',
-      'c=IN IP4 127.0.0.1',
-      `m=audio ${session.audioReturnPort} RTP/SAVP ${audioInfo.pt}`,
-      `a=rtpmap:${audioInfo.pt} MPEG4-GENERIC/16000/1`,
-      `a=fmtp:${audioInfo.pt} profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=F8F02000`,
-      `a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:${session.audioSRTP.toString('base64')}`,
-    ].join('\r\n');
+    // 4. Return audio ffmpeg deferred — only spawned when talkback actually starts
+    //    Saves ~100ms process spawn from the critical video path
 
-    const sdpPath = `/tmp/doorbell-return-audio-${sid}.sdp`;
-    fs.writeFileSync(sdpPath, sdpContent);
-    log(`Return audio ready on port ${session.audioReturnPort}`);
-
-    const returnAudioArgs = [
-      '-hide_banner', '-loglevel', 'warning',
-      '-acodec', 'libfdk_aac',
-      '-protocol_whitelist', 'file,crypto,udp,rtp',
-      '-f', 'sdp', '-i', sdpPath,
-      '-codec:a', 'libfdk_aac', '-profile:a', 'aac_low',
-      '-ar', '16000', '-ac', '1', '-b:a', '24k',
-      '-f', 'adts', 'pipe:1',
-    ];
-
-    const returnAudioFfmpeg = spawn('/usr/local/bin/ffmpeg-hk', returnAudioArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    returnAudioFfmpeg.stderr.on('data', (data) => {
-      const msg = data.toString().trim();
-      if (msg) log(`ffmpeg-return[${sid}]: ${msg}`);
-    });
-
-    returnAudioFfmpeg.on('close', (code) => {
-      log(`ffmpeg-return exited with code ${code} for session ${sid}`);
-      try { fs.unlinkSync(sdpPath); } catch (e) {}
-    });
-
-    returnAudioFfmpeg.on('error', (err) => {
-      log(`ffmpeg-return spawn error: ${err.message}`);
-    });
-
-    session.returnAudioFfmpeg = returnAudioFfmpeg;
-
-    // Start P2P livestream — this triggers "station livestream start" event
-    await eufyClient.startStationLivestream(DEVICE_SERIAL);
-    log(`P2P livestream started for session ${sid}`);
+    // 5. Wait for P2P to establish
+    await p2pPromise;
+    log(`[${sid}] +${Date.now() - t0}ms P2P established`);
     event('stream_start', null);
   } catch (err) {
     log(`Failed to start livestream: ${err.message}`);
@@ -930,6 +900,8 @@ async function initEufy() {
     }
 
     const session = activeSessions[sessionId];
+    const elapsed = session.streamStartTime ? Date.now() - session.streamStartTime : 0;
+    log(`[${sessionId.substring(0, 8)}] +${elapsed}ms first video data arrived`);
 
     // Pipe video to video ffmpeg
     session.videoStream = videostream;
@@ -992,22 +964,19 @@ async function initEufy() {
       log('No audio stream or audio ffmpeg — audio disabled for this session');
     }
 
-    // Start talkback for two-way audio
-    try {
-      await eufyClient.startStationTalkback(DEVICE_SERIAL);
-      log('Talkback requested');
-    } catch (err) {
-      log(`Talkback start failed: ${err.message}`);
-    }
+    // Start talkback — fire and forget, don't block the video path
+    eufyClient.startStationTalkback(DEVICE_SERIAL)
+      .then(() => log('Talkback requested'))
+      .catch((err) => log(`Talkback start failed: ${err.message}`));
   });
 
   eufyClient.on('station talkback start', (station, device, talkbackStream) => {
     if (device.getSerial() !== DEVICE_SERIAL) return;
-    log('Talkback started — piping return audio');
+    log('Talkback started — setting up return audio');
 
-    // Find session with return audio ffmpeg ready
+    // Find active session
     const sessionId = Object.keys(activeSessions).find(
-      (id) => activeSessions[id].returnAudioFfmpeg && !activeSessions[id].talkbackActive
+      (id) => activeSessions[id].ffmpegProcess && !activeSessions[id].talkbackActive
     );
 
     if (!sessionId) {
@@ -1016,17 +985,66 @@ async function initEufy() {
     }
 
     const session = activeSessions[sessionId];
+    const sid = sessionId.substring(0, 8);
     session.talkbackActive = true;
     session.talkbackStream = talkbackStream;
 
+    // Spawn return audio ffmpeg now (deferred from stream start to keep video path fast)
+    // Receive SRTP from HomeKit mic → decode AAC-ELD → encode AAC-LC ADTS
+    const pt = session.audioPt;
+    const sdpContent = [
+      'v=0',
+      'o=- 0 0 IN IP4 127.0.0.1',
+      's=HomeKit Return Audio',
+      'c=IN IP4 127.0.0.1',
+      `m=audio ${session.audioReturnPort} RTP/SAVP ${pt}`,
+      `a=rtpmap:${pt} MPEG4-GENERIC/16000/1`,
+      `a=fmtp:${pt} profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=F8F02000`,
+      `a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:${session.audioSRTP.toString('base64')}`,
+    ].join('\r\n');
+
+    const sdpPath = `/tmp/doorbell-return-audio-${sid}.sdp`;
+    fs.writeFileSync(sdpPath, sdpContent);
+
+    const returnAudioArgs = [
+      '-hide_banner', '-loglevel', 'warning',
+      '-acodec', 'libfdk_aac',
+      '-protocol_whitelist', 'file,crypto,udp,rtp',
+      '-f', 'sdp', '-i', sdpPath,
+      '-codec:a', 'libfdk_aac', '-profile:a', 'aac_low',
+      '-ar', '16000', '-ac', '1', '-b:a', '24k',
+      '-f', 'adts', 'pipe:1',
+    ];
+
+    const returnAudioFfmpeg = spawn('/usr/local/bin/ffmpeg-hk', returnAudioArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    returnAudioFfmpeg.stderr.on('data', (data) => {
+      const msg = data.toString().trim();
+      if (msg) log(`ffmpeg-return[${sid}]: ${msg}`);
+    });
+
+    returnAudioFfmpeg.on('close', (code) => {
+      log(`ffmpeg-return exited with code ${code} for session ${sid}`);
+      try { fs.unlinkSync(sdpPath); } catch (e) {}
+    });
+
+    returnAudioFfmpeg.on('error', (err) => {
+      log(`ffmpeg-return spawn error: ${err.message}`);
+    });
+
+    session.returnAudioFfmpeg = returnAudioFfmpeg;
+
     // Pipe decoded AAC-LC from return audio ffmpeg → eufy talkback stream
-    session.returnAudioFfmpeg.stdout.on('data', (chunk) => {
+    returnAudioFfmpeg.stdout.on('data', (chunk) => {
       if (session.talkbackStream && session.talkbackStream.writable) {
         try { session.talkbackStream.write(chunk); } catch (e) {}
       }
     });
 
-    session.returnAudioFfmpeg.stdout.on('error', () => {});
+    returnAudioFfmpeg.stdout.on('error', () => {});
+    log('Talkback piping active');
   });
 
   eufyClient.on('station talkback stop', (station, device) => {
