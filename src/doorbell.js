@@ -45,11 +45,15 @@ const DEVICE_SERIAL = process.env.DEVICE_SERIAL;       // E340 serial
 const HOMEKIT_PIN = process.env.HOMEKIT_PIN || '123-45-678';
 const HOMEKIT_USERNAME = process.env.HOMEKIT_USERNAME || 'AA:BB:CC:DD:EE:FF';
 const HOMEKIT_PORT = parseInt(process.env.HOMEKIT_PORT || '47128', 10);
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || ''; // HTTP Basic Auth
 
 if (!EUFY_USERNAME || !EUFY_PASSWORD || !DEVICE_SERIAL) {
   console.error('Missing required env vars: EUFY_USERNAME, EUFY_PASSWORD, DEVICE_SERIAL');
   process.exit(1);
 }
+
+const ALLOWED_PERIODS = ['-1 day', '-7 days', '-30 days', '-90 days', '-365 days'];
+function sanitizePeriod(p) { return ALLOWED_PERIODS.includes(p) ? p : '-1 day'; }
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -121,13 +125,13 @@ const queryExport = db.prepare(`
   SELECT id, timestamp, type, detail, meta FROM events
   WHERE type != 'heartbeat'
   AND timestamp >= ? AND timestamp <= ?
-  ORDER BY id
+  ORDER BY id LIMIT 50001
 `);
 const queryExportByType = db.prepare(`
   SELECT id, timestamp, type, detail, meta FROM events
   WHERE type = ?
   AND timestamp >= ? AND timestamp <= ?
-  ORDER BY id
+  ORDER BY id LIMIT 50001
 `);
 const queryLastHeartbeat = db.prepare(`
   SELECT timestamp, meta FROM events WHERE type = 'heartbeat'
@@ -166,105 +170,133 @@ const DASHBOARD_HTML = fs.readFileSync(
 );
 
 const httpServer = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(DASHBOARD_HTML);
-    return;
-  }
-  if (url.pathname === '/api/events') {
-    const type = url.searchParams.get('type') || '';
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
-    const rows = type
-      ? queryEventsByType.all(type, limit)
-      : queryEvents.all('heartbeat', limit);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/stats') {
-    const period = url.searchParams.get('period') || '-1 day';
-    const rows = queryStats.all(period);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/hours') {
-    const period = url.searchParams.get('period') || '-1 day';
-    const rows = queryHourly.all(period);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/faces') {
-    const period = url.searchParams.get('period') || '-1 day';
-    const rows = queryFaces.all(period);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/status') {
-    const uptimeSec = Math.floor(process.uptime());
-    const hb = queryLastHeartbeat.all();
-    const total = queryTotalCount.get();
-    let dbSize = 0;
-    try { dbSize = fs.statSync(DB_PATH).size; } catch (e) {}
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      uptime: uptimeSec,
-      device: eufyDevice ? eufyDevice.getName() : null,
-      sessions: Object.keys(activeSessions).length,
-      dbSize,
-      totalEvents: total.count,
-      lastHeartbeat: hb.length ? hb[0].timestamp : null,
-      startedAt: new Date(Date.now() - uptimeSec * 1000).toISOString(),
-    }));
-    return;
-  }
-  if (url.pathname === '/api/daily') {
-    const period = url.searchParams.get('period') || '-7 days';
-    const rows = queryDaily.all(period);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/search') {
-    const q = url.searchParams.get('q') || '';
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
-    const rows = q ? querySearch.all(`%${q}%`, limit) : [];
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(rows));
-    return;
-  }
-  if (url.pathname === '/api/export') {
-    const format = url.searchParams.get('format') || 'csv';
-    const type = url.searchParams.get('type') || '';
-    const from = url.searchParams.get('from') || '2000-01-01T00:00:00Z';
-    const to = url.searchParams.get('to') || '2099-12-31T23:59:59Z';
-    const rows = type
-      ? queryExportByType.all(type, from, to)
-      : queryExport.all(from, to);
-    if (format === 'json') {
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Content-Disposition': 'attachment; filename="doorbell-events.json"',
-      });
-      res.end(JSON.stringify(rows, null, 2));
-    } else {
-      const header = 'id,timestamp,type,detail,meta';
-      const csvRows = rows.map(r =>
-        [r.id, r.timestamp, r.type, csvEscape(r.detail), csvEscape(r.meta)].join(',')
-      );
-      res.writeHead(200, {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': 'attachment; filename="doorbell-events.csv"',
-      });
-      res.end(header + '\n' + csvRows.join('\n'));
+  // Basic auth (if DASHBOARD_PASSWORD is set)
+  if (DASHBOARD_PASSWORD) {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith('Basic ')) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Doorbell"' });
+      res.end('Unauthorized');
+      return;
     }
-    return;
+    const decoded = Buffer.from(auth.slice(6), 'base64').toString();
+    const pass = decoded.substring(decoded.indexOf(':') + 1);
+    if (pass !== DASHBOARD_PASSWORD) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Doorbell"' });
+      res.end('Unauthorized');
+      return;
+    }
   }
-  res.writeHead(404);
-  res.end('Not found');
+
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(DASHBOARD_HTML);
+      return;
+    }
+    if (url.pathname === '/api/events') {
+      const type = url.searchParams.get('type') || '';
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
+      const rows = type
+        ? queryEventsByType.all(type, limit)
+        : queryEvents.all('heartbeat', limit);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/stats') {
+      const period = sanitizePeriod(url.searchParams.get('period') || '-1 day');
+      const rows = queryStats.all(period);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/hours') {
+      const period = sanitizePeriod(url.searchParams.get('period') || '-1 day');
+      const rows = queryHourly.all(period);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/faces') {
+      const period = sanitizePeriod(url.searchParams.get('period') || '-1 day');
+      const rows = queryFaces.all(period);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/status') {
+      const uptimeSec = Math.floor(process.uptime());
+      const hb = queryLastHeartbeat.all();
+      const total = queryTotalCount.get();
+      let dbSize = 0;
+      try { dbSize = fs.statSync(DB_PATH).size; } catch (e) {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        uptime: uptimeSec,
+        device: eufyDevice ? eufyDevice.getName() : null,
+        sessions: Object.keys(activeSessions).length,
+        dbSize,
+        totalEvents: total.count,
+        lastHeartbeat: hb.length ? hb[0].timestamp : null,
+        startedAt: new Date(Date.now() - uptimeSec * 1000).toISOString(),
+      }));
+      return;
+    }
+    if (url.pathname === '/api/daily') {
+      const period = sanitizePeriod(url.searchParams.get('period') || '-7 days');
+      const rows = queryDaily.all(period);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/search') {
+      const q = url.searchParams.get('q') || '';
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '100', 10), 500);
+      const rows = q ? querySearch.all(`%${q}%`, limit) : [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+      return;
+    }
+    if (url.pathname === '/api/export') {
+      const format = url.searchParams.get('format') || 'csv';
+      const type = url.searchParams.get('type') || '';
+      const from = url.searchParams.get('from') || '2000-01-01T00:00:00Z';
+      const to = url.searchParams.get('to') || '2099-12-31T23:59:59Z';
+      const rows = type
+        ? queryExportByType.all(type, from, to)
+        : queryExport.all(from, to);
+      if (rows.length > 50000) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('Too many rows. Narrow the date range.');
+        return;
+      }
+      if (format === 'json') {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'Content-Disposition': 'attachment; filename="doorbell-events.json"',
+        });
+        res.end(JSON.stringify(rows, null, 2));
+      } else {
+        const header = 'id,timestamp,type,detail,meta';
+        const csvRows = rows.map(r =>
+          [r.id, r.timestamp, r.type, csvEscape(r.detail), csvEscape(r.meta)].join(',')
+        );
+        res.writeHead(200, {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': 'attachment; filename="doorbell-events.csv"',
+        });
+        res.end(header + '\n' + csvRows.join('\n'));
+      }
+      return;
+    }
+    res.writeHead(404);
+    res.end('Not found');
+  } catch (err) {
+    log(`HTTP error: ${err.message}`);
+    res.writeHead(500, { 'Content-Type': 'text/plain' });
+    res.end('Internal server error');
+  }
 });
 
 httpServer.listen(80, () => log('Dashboard listening on port 80'));
@@ -282,6 +314,7 @@ const activeSessions = {};
 // Reconnection state
 let reconnectDelay = 10;
 let reconnectTimer = null;
+let reconnecting = false;
 
 // Push health tracking
 let lastDetectionTime = Date.now();
@@ -291,7 +324,12 @@ let cachedSnapshot = null;      // Buffer (JPEG)
 let cachedSnapshotTime = 0;     // Date.now() when cached
 let cachedSnapshotUrl = null;   // URL it was fetched from
 let snapshotRefreshTimer = null;
+let heartbeatInterval = null;
+let cloudRefreshInterval = null;
+let snapshotGrabInterval = null;
+let pushWatchdogInterval = null;
 let snapshotGrabActive = false; // true when doing a quick P2P grab
+let streamPending = false;      // true while HomeKit stream is being set up
 let lastPersonTime = 0;         // Date.now() of last person/ring detection
 const PERSON_HOLD = 600000;     // 10 minutes
 
@@ -333,11 +371,15 @@ function resizeSnapshot(jpegBuf, width, height) {
     ];
     const ff = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const chunks = [];
+    let resolved = false;
+    const done = (buf) => { if (!resolved) { resolved = true; resolve(buf); } };
+    const timer = setTimeout(() => { ff.kill('SIGKILL'); done(jpegBuf); }, 5000);
     ff.stdout.on('data', (c) => chunks.push(c));
     ff.on('close', (code) => {
-      resolve(code === 0 && chunks.length ? Buffer.concat(chunks) : jpegBuf);
+      clearTimeout(timer);
+      done(code === 0 && chunks.length ? Buffer.concat(chunks) : jpegBuf);
     });
-    ff.on('error', () => resolve(jpegBuf));
+    ff.on('error', () => done(jpegBuf));
     ff.stdin.on('error', () => {});
     ff.stdin.end(jpegBuf);
   });
@@ -393,12 +435,15 @@ const streamingDelegate = {
     ];
     const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'ignore'] });
     const chunks = [];
+    let done = false;
     ff.stdout.on('data', (c) => chunks.push(c));
     ff.on('close', (code) => {
+      if (done) return;
+      done = true;
       callback(code === 0 && chunks.length ? undefined : new Error('snapshot failed'),
         chunks.length ? Buffer.concat(chunks) : undefined);
     });
-    ff.on('error', (err) => callback(err));
+    ff.on('error', (err) => { if (!done) { done = true; callback(err); } });
   },
 
   async prepareStream(request, callback) {
@@ -429,6 +474,7 @@ const streamingDelegate = {
         videoStream: null,
         audioFfmpegProcess: null,
         audioStream: null,
+        snapshotFfmpeg: null,    // stream-snapshot ffmpeg (killed on stop)
         returnAudioFfmpeg: null,
         talkbackActive: false,
         talkbackStream: null,
@@ -530,6 +576,7 @@ async function startLivestream(session, sessionId, videoInfo, audioInfo) {
   try {
     session.streamStartTime = t0;
     session.audioPt = audioInfo.pt;
+    streamPending = true;
 
     // 1. Fire P2P FIRST — this is the slowest step (2-5s), let it work while we set up ffmpeg
     const p2pPromise = eufyClient.startStationLivestream(DEVICE_SERIAL);
@@ -621,9 +668,18 @@ async function startLivestream(session, sessionId, videoInfo, audioInfo) {
 
     // 5. Wait for P2P to establish
     await p2pPromise;
+    streamPending = false;
+
+    // Session may have been stopped while we were awaiting P2P
+    if (!activeSessions[sessionId]) {
+      log(`[${sid}] Session cancelled during P2P setup`);
+      return;
+    }
+
     log(`[${sid}] +${Date.now() - t0}ms P2P established`);
     event('stream_start', null);
   } catch (err) {
+    streamPending = false;
     log(`Failed to start livestream: ${err.message}`);
     stopStream(sessionId);
   }
@@ -651,6 +707,12 @@ function stopStream(sessionId) {
       session.audioFfmpegProcess.kill('SIGTERM');
     } catch (e) { /* ignore */ }
     session.audioFfmpegProcess = null;
+  }
+
+  // Kill snapshot ffmpeg
+  if (session.snapshotFfmpeg) {
+    try { session.snapshotFfmpeg.kill('SIGTERM'); } catch (e) {}
+    session.snapshotFfmpeg = null;
   }
 
   // Detach video stream listener
@@ -912,6 +974,7 @@ async function initEufy() {
       '-f', 'h264', '-i', 'pipe:0',
       '-vframes', '1', '-f', 'mjpeg', '-q:v', '5', '-',
     ], { stdio: ['pipe', 'pipe', 'ignore'] });
+    session.snapshotFfmpeg = streamSnapshotFfmpeg;
     const ssChunks = [];
     streamSnapshotFfmpeg.stdout.on('data', (c) => ssChunks.push(c));
     streamSnapshotFfmpeg.on('close', (code) => {
@@ -920,13 +983,17 @@ async function initEufy() {
         cachedSnapshotTime = Date.now();
         log(`Snapshot grabbed from livestream (${(cachedSnapshot.length / 1024).toFixed(0)}KB)`);
       }
+      if (session.snapshotFfmpeg === streamSnapshotFfmpeg) session.snapshotFfmpeg = null;
     });
     streamSnapshotFfmpeg.on('error', () => {});
     streamSnapshotFfmpeg.stdin.on('error', () => {});
 
     videostream.on('data', (chunk) => {
       if (session.ffmpegProcess && session.ffmpegProcess.stdin.writable) {
-        session.ffmpegProcess.stdin.write(chunk);
+        if (!session.ffmpegProcess.stdin.write(chunk) && !session._bpWarned) {
+          session._bpWarned = true;
+          log(`[${sessionId.substring(0, 8)}] ffmpeg stdin backpressure — data buffering`);
+        }
       }
       // Feed snapshot grabber until it's got its frame
       if (streamSnapshotFfmpeg.stdin.writable) {
@@ -1082,17 +1149,21 @@ function updateMotion(state) {
 }
 
 function scheduleReconnect(reason) {
-  if (reconnectTimer) return; // already scheduled
+  if (reconnectTimer || reconnecting) return; // already scheduled or in progress
   log(`Scheduling reconnect in ${reconnectDelay}s (triggered by: ${reason})`);
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
+    if (reconnecting) return;
     try {
       if (eufyClient) {
+        reconnecting = true;
         log('Attempting Eufy reconnect...');
         await eufyClient.connect();
         log('Eufy reconnected');
+        reconnecting = false;
       }
     } catch (err) {
+      reconnecting = false;
       reconnectDelay = Math.min(reconnectDelay * 2, 60);
       log(`Reconnect failed: ${err.message}`);
       scheduleReconnect('retry');
@@ -1106,6 +1177,16 @@ function scheduleReconnect(reason) {
 
 async function shutdown(signal) {
   log(`Received ${signal} — shutting down`);
+
+  // Safety net: force exit after 5s if cleanup hangs
+  setTimeout(() => { log('Shutdown timeout — forcing exit'); process.exit(1); }, 5000).unref();
+
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (snapshotRefreshTimer) { clearTimeout(snapshotRefreshTimer); snapshotRefreshTimer = null; }
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  if (cloudRefreshInterval) { clearInterval(cloudRefreshInterval); cloudRefreshInterval = null; }
+  if (snapshotGrabInterval) { clearInterval(snapshotGrabInterval); snapshotGrabInterval = null; }
+  if (pushWatchdogInterval) { clearInterval(pushWatchdogInterval); pushWatchdogInterval = null; }
 
   for (const sessionId of Object.keys(activeSessions)) {
     stopStream(sessionId);
@@ -1143,11 +1224,10 @@ process.on('SIGINT', () => shutdown('SIGINT'));
     });
 
     log(`HomeKit accessory published on port ${HOMEKIT_PORT}`);
-    log(`Pairing code: ${HOMEKIT_PIN}`);
     log('=== Doorbell service ready ===');
 
     // Heartbeat — log status every hour so we can verify the system is alive
-    setInterval(() => {
+    heartbeatInterval = setInterval(() => {
       const sessions = Object.keys(activeSessions).length;
       const uptime = Math.floor(process.uptime() / 3600);
       log(`HEARTBEAT — uptime: ${uptime}h, device: ${eufyDevice ? 'connected' : 'MISSING'}, sessions: ${sessions}`);
@@ -1155,7 +1235,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
     }, 3600000);
 
     // Refresh cloud data every 3 hours to keep push registration alive
-    setInterval(async () => {
+    cloudRefreshInterval = setInterval(async () => {
       try {
         log('Refreshing cloud data...');
         await eufyClient.refreshCloudData();
@@ -1168,9 +1248,9 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
     // Periodic snapshot grab — start a quick P2P stream every 60s to get a fresh frame
     // Pauses for 10 min after person/ring detection to hold onto that event image
-    setInterval(async () => {
-      // Skip if there's an active HomeKit stream or another grab in progress
-      if (Object.keys(activeSessions).length > 0 || snapshotGrabActive) return;
+    snapshotGrabInterval = setInterval(async () => {
+      // Skip if there's an active/pending HomeKit stream or another grab in progress
+      if (Object.keys(activeSessions).length > 0 || snapshotGrabActive || streamPending) return;
       if (!eufyClient || !eufyDevice) return;
       // Hold person/ring snapshot for 10 minutes
       if ((Date.now() - lastPersonTime) < PERSON_HOLD) return;
@@ -1193,7 +1273,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
     }, 60000);
 
     // Push health watchdog — if no detection events for 4h during daytime, force reconnect
-    setInterval(() => {
+    pushWatchdogInterval = setInterval(() => {
       const hour = new Date().getHours();
       if (hour < 6 || hour >= 23) return; // skip overnight
       const silenceHours = (Date.now() - lastDetectionTime) / 3600000;

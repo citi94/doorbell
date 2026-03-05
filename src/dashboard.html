@@ -572,7 +572,7 @@ function fmtBytes(b) {
 
 function esc(s) {
   if (!s) return '';
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 async function loadStatus() {
@@ -586,7 +586,7 @@ async function loadStatus() {
       ['Events', st.totalEvents.toLocaleString()],
       ['Started', new Date(st.startedAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })],
     ].map(([k, v]) =>
-      `<div class="sys-item"><span>${k}:</span> <span class="sys-val">${v}</span></div>`
+      `<div class="sys-item"><span>${esc(k)}:</span> <span class="sys-val">${esc(String(v))}</span></div>`
     ).join('');
   } catch (e) {}
 }
@@ -611,9 +611,9 @@ async function loadDaily() {
       const d = days[day];
       const total = types.reduce((s, t) => s + (d[t] || 0), 0);
       const fmtDay = new Date(day + 'T12:00:00').toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
-      return '<tr><td>' + fmtDay + '</td>' +
-        types.map(t => '<td class="num">' + (d[t] || '') + '</td>').join('') +
-        '<td class="num">' + total + '</td></tr>';
+      return '<tr><td>' + esc(fmtDay) + '</td>' +
+        types.map(t => '<td class="num">' + esc(String(d[t] || '')) + '</td>').join('') +
+        '<td class="num">' + esc(String(total)) + '</td></tr>';
     }).join('');
   } catch (e) {}
 }
@@ -639,7 +639,7 @@ async function load() {
 
     // Stats
     $('#stats').innerHTML = stats.length ? stats.map(s =>
-      `<div class="stat-card"><div class="value">${s.count}</div><div class="label">${esc(s.type)}</div></div>`
+      `<div class="stat-card"><div class="value">${esc(String(s.count))}</div><div class="label">${esc(s.type)}</div></div>`
     ).join('') : '';
 
     // Hourly chart
@@ -650,12 +650,12 @@ async function load() {
       const c = hourMap[i] || 0;
       const pct = c > 0 ? Math.max((c / maxH) * 100, 4) : 0;
       const cls = i === nowHour ? ' now' : '';
-      return `<div class="col${cls}"><div class="bar" style="height:${pct}%" data-n="${c}"></div><div class="lbl">${i % 3 === 0 ? String(i).padStart(2, '0') : ''}</div></div>`;
+      return `<div class="col${cls}"><div class="bar" style="height:${pct}%" data-n="${esc(String(c))}"></div><div class="lbl">${i % 3 === 0 ? String(i).padStart(2, '0') : ''}</div></div>`;
     }).join('');
 
     // Faces
     $('#faces').innerHTML = faces.length ? faces.map(f =>
-      `<div class="face-card"><div class="face-name">${esc(f.name)}</div><div class="face-meta"><span>${f.count}</span> visit${f.count !== 1 ? 's' : ''} &middot; ${ago(f.last_seen)}</div></div>`
+      `<div class="face-card"><div class="face-name">${esc(f.name)}</div><div class="face-meta"><span>${esc(String(f.count))}</span> visit${f.count !== 1 ? 's' : ''} &middot; ${ago(f.last_seen)}</div></div>`
     ).join('') : '<div class="empty-state">No faces recognised yet</div>';
 
     // Events
