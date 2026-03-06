@@ -559,6 +559,26 @@ const doorbellController = new hap.DoorbellController({
 
 accessory.configureController(doorbellController);
 
+// Additional motion sensors for granular detection types
+const personSensor = new Service.MotionSensor('Person', 'person');
+personSensor.setCharacteristic(Characteristic.Name, 'Person');
+personSensor.addOptionalCharacteristic(Characteristic.ConfiguredName);
+personSensor.setCharacteristic(Characteristic.ConfiguredName, 'Person');
+const petSensor = new Service.MotionSensor('Pet', 'pet');
+petSensor.setCharacteristic(Characteristic.Name, 'Pet');
+petSensor.addOptionalCharacteristic(Characteristic.ConfiguredName);
+petSensor.setCharacteristic(Characteristic.ConfiguredName, 'Pet');
+accessory.addService(personSensor);
+accessory.addService(petSensor);
+
+// Name the built-in motion sensor
+const builtInMotion = doorbellController.motionService;
+if (builtInMotion) {
+  builtInMotion.setCharacteristic(Characteristic.Name, 'Motion');
+  builtInMotion.addOptionalCharacteristic(Characteristic.ConfiguredName);
+  builtInMotion.setCharacteristic(Characteristic.ConfiguredName, 'Motion');
+}
+
 // ---------------------------------------------------------------------------
 // Livestream management
 // ---------------------------------------------------------------------------
@@ -856,13 +876,15 @@ async function initEufy() {
       log(`Person detected: ${state}${person ? ` (${person})` : ''}`);
       if (state) { lastDetectionTime = Date.now(); lastPersonTime = Date.now(); event('person', person || null); scheduleSnapshotRefresh(); }
       updateMotion(state);
+      personSensor.updateCharacteristic(Characteristic.MotionDetected, state);
     }
   });
 
   eufyClient.on('device stranger person detected', (device, state) => {
     if (device.getSerial() === DEVICE_SERIAL) {
       log(`Stranger detected: ${state}`);
-      if (state) { lastPersonTime = Date.now(); event('stranger', null); scheduleSnapshotRefresh(); }
+      if (state) { lastPersonTime = Date.now(); lastDetectionTime = Date.now(); event('stranger', null); scheduleSnapshotRefresh(); }
+      personSensor.updateCharacteristic(Characteristic.MotionDetected, state);
     }
   });
 
@@ -908,8 +930,9 @@ async function initEufy() {
   eufyClient.on('device pet detected', (device, state) => {
     if (device.getSerial() === DEVICE_SERIAL) {
       log(`Pet detected: ${state}`);
-      if (state) event('pet', null);
+      if (state) { lastDetectionTime = Date.now(); event('pet', null); }
       updateMotion(state);
+      petSensor.updateCharacteristic(Characteristic.MotionDetected, state);
     }
   });
 
