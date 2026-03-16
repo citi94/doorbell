@@ -563,11 +563,11 @@ accessory.configureController(doorbellController);
 const personSensor = new Service.MotionSensor('Person', 'person');
 personSensor.setCharacteristic(Characteristic.Name, 'Person');
 personSensor.addOptionalCharacteristic(Characteristic.ConfiguredName);
-personSensor.setCharacteristic(Characteristic.ConfiguredName, 'Person');
+personSensor.updateCharacteristic(Characteristic.ConfiguredName, 'Person');
 const petSensor = new Service.MotionSensor('Pet', 'pet');
 petSensor.setCharacteristic(Characteristic.Name, 'Pet');
 petSensor.addOptionalCharacteristic(Characteristic.ConfiguredName);
-petSensor.setCharacteristic(Characteristic.ConfiguredName, 'Pet');
+petSensor.updateCharacteristic(Characteristic.ConfiguredName, 'Pet');
 accessory.addService(personSensor);
 accessory.addService(petSensor);
 
@@ -576,7 +576,7 @@ const builtInMotion = doorbellController.motionService;
 if (builtInMotion) {
   builtInMotion.setCharacteristic(Characteristic.Name, 'Motion');
   builtInMotion.addOptionalCharacteristic(Characteristic.ConfiguredName);
-  builtInMotion.setCharacteristic(Characteristic.ConfiguredName, 'Motion');
+  builtInMotion.updateCharacteristic(Characteristic.ConfiguredName, 'Motion');
 }
 
 // ---------------------------------------------------------------------------

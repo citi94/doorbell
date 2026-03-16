@@ -32,9 +32,11 @@ echo "$(date): Starting doorbell QEMU VM..."
     -machine q35,accel=hvf -cpu host -smp 1 -m 512 \
     -device virtio-rng-pci \
     -drive if=pflash,format=raw,file=/usr/local/share/qemu/edk2-x86_64-code.fd,readonly=on \
-    -drive if=pflash,format=raw,file=/var/lib/doorbell-vm/efi_vars.fd \
+    -drive if=pflash,format=raw,file=/var/lib/doorbell-vm-ubuntu/efi_vars.fd \
     -device virtio-blk-pci,drive=disk0 \
-    -drive id=disk0,if=none,format=qcow2,file=/var/lib/doorbell-vm/disk.qcow2 \
+    -drive id=disk0,if=none,format=qcow2,file=/var/lib/doorbell-vm-ubuntu/disk.qcow2 \
+    -device virtio-blk-pci,drive=disk1 \
+    -drive id=disk1,if=none,format=qcow2,file=/var/lib/doorbell-vm-ubuntu/cidata.qcow2 \
     -device virtio-net-pci,netdev=net0,mac=52:54:00:XX:XX:XX \
     -netdev socket,id=net0,fd=3 \
     -nographic -serial mon:stdio &
