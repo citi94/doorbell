@@ -1,5 +1,7 @@
 # Custom Lightweight Doorbell VM — Research Notes
 
+> **Outcome (March 2026):** This research led to a working system. The initial build used Alpine Linux 3.21, which worked but had a kernel slab memory leak (`maple_node` objects) under the heavy ffmpeg process churn. After two weeks of debugging, we migrated to Ubuntu 24.04 LTS (kernel 6.8) which has been stable with 5+ day uptimes. The go2rtc component was ultimately not needed — ffmpeg handles video transcoding directly. See [vm-setup.md](vm-setup.md) for the current setup.
+
 ## Problem
 
 The HAOS VM (4GB RAM, 5 Docker containers) crashes every 8-27 hours on QEMU/HVF on macOS. The crash pattern is: CPU spikes to 100%, all services become unresponsive. This happens with or without the P2P video stream running. The Pi-hole VM on the same host (384MB, Alpine Linux) has been stable for weeks. The root cause appears to be an intermittent HVF bug triggered by the complexity/load of HAOS, not by any single component.

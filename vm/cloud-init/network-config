@@ -1,0 +1,12 @@
+version: 2
+ethernets:
+  id0:
+    match:
+      macaddress: "<vm-mac-address>"
+    addresses:
+      - <vm-ip>/24
+    gateway4: <gateway-ip>
+    nameservers:
+      addresses:
+        - 1.1.1.1
+        - 8.8.8.8

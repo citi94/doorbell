@@ -1,0 +1,21 @@
+#cloud-config
+hostname: doorbell
+manage_etc_hosts: true
+
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - <your-ssh-public-key>
+
+packages:
+  - ffmpeg
+  - curl
+
+runcmd:
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+  - mkdir -p /opt/doorbell
+  - systemctl disable --now snapd snapd.socket snapd.seeded 2>/dev/null || true
+  - systemctl disable --now fwupd fwupd-refresh.timer 2>/dev/null || true
+  - systemctl disable --now ModemManager multipathd udisks2 2>/dev/null || true
